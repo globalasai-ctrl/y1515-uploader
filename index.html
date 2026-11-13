@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Y_1515 アップローダー</title>
+<style>
+  :root {
+    --bg: #111317;
+    --card: #1b1e24;
+    --accent: #4f8cff;
+    --accent2: #2fbf71;
+    --text: #e8eaed;
+    --sub: #9aa0a8;
+    --danger: #ff5a5a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding-bottom: 100px;
+  }
+  header {
+    padding: 16px 16px 8px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  h1 { font-size: 18px; margin: 0; }
+  .gear {
+    background: none; border: none; color: var(--sub); font-size: 22px; cursor: pointer;
+  }
+  main { padding: 0 16px; }
+  .drop {
+    border: 2px dashed #3a3f48;
+    border-radius: 16px;
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--sub);
+    margin: 12px 0 16px;
+  }
+  .drop.active { border-color: var(--accent); color: var(--text); }
+  .btnrow { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+  button {
+    font-size: 15px; padding: 10px 16px; border-radius: 10px; border: none;
+    cursor: pointer; font-weight: 600;
+  }
+  .primary { background: var(--accent); color: #fff; }
+  .secondary { background: #2a2e36; color: var(--text); }
+  input[type=file] { display: none; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+  }
+  .thumb {
+    position: relative;
+    aspect-ratio: 1/1;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #222;
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .status {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    font-size: 11px; text-align: center; padding: 3px 0;
+    background: rgba(0,0,0,0.6);
+  }
+  .thumb .status.ok { color: var(--accent2); }
+  .thumb .status.err { color: var(--danger); }
+  .thumb .status.wait { color: var(--sub); }
+  .thumb .remove {
+    position: absolute; top: 4px; right: 4px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(0,0,0,0.6); color: #fff; border: none;
+    font-size: 14px; line-height: 1; cursor: pointer;
+  }
+  .bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--card);
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    display: flex; gap: 10px; align-items: center;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.4);
+  }
+  .bar .info { flex: 1; font-size: 13px; color: var(--sub); }
+  .progress {
+    height: 6px; background: #2a2e36; border-radius: 3px; overflow: hidden; margin-top: 6px;
+  }
+  .progress > div { height: 100%; background: var(--accent2); width: 0%; transition: width .2s; }
+  .modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 50; padding: 16px;
+  }
+  .modal.hidden { display: none; }
+  .modalcard {
+    background: var(--card); border-radius: 14px; padding: 20px; width: 100%; max-width: 420px;
+    max-height: 85vh; overflow-y: auto;
+  }
+  .modalcard h2 { font-size: 16px; margin-top: 0; }
+  .modalcard label { display: block; font-size: 13px; color: var(--sub); margin: 12px 0 4px; }
+  .modalcard input[type=text], .modalcard select {
+    width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #333945;
+    background: #11141a; color: var(--text); font-size: 14px;
+  }
+  .hint { font-size: 12px; color: var(--sub); line-height: 1.5; margin-top: 4px; }
+  .folderlist { margin-top: 8px; }
+  .folderitem {
+    padding: 8px 10px; border-radius: 8px; background: #11141a; margin-bottom: 6px;
+    font-size: 13px; cursor: pointer; display: flex; justify-content: space-between;
+  }
+  .folderitem.selected { outline: 2px solid var(--accent); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Y_1515 アップローダー</h1>
+  <button class="gear" id="openSettings">⚙️</button>
+</header>
+
+<main>
+  <div class="drop" id="drop">
+    <div id="dropLabel">写真を選ぶ（複数選択OK）</div>
+    <div class="btnrow">
+      <button class="primary" id="pickCamera">📷 撮影</button>
+      <button class="secondary" id="pickGallery">🖼 ギャラリーから選ぶ</button>
+    </div>
+    <input type="file" id="fileCamera" accept="image/*" capture="environment">
+    <input type="file" id="fileGallery" accept="image/*" multiple>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="bar">
+  <div class="info" id="info">
+    0 枚選択中
+    <div class="progress"><div id="progressBar"></div></div>
+  </div>
+  <button class="secondary" id="clearAll">クリア</button>
+  <button class="primary" id="uploadAll">アップロード</button>
+</div>
+
+<div class="modal hidden" id="settingsModal">
+  <div class="modalcard">
+    <h2>設定</h2>
+
+    <label>Google OAuth クライアントID</label>
+    <input type="text" id="clientId" placeholder="xxxx.apps.googleusercontent.com">
+    <div class="hint">Google Cloud Console で発行したWebアプリ用クライアントID。一度入れればこの端末に保存される。</div>
+
+    <label>リサイズサイズ (px)</label>
+    <input type="text" id="resizeSize" placeholder="1000" value="1000">
+
+    <label>アップロード先フォルダ</label>
+    <button class="secondary" id="chooseFolder" style="margin-top:6px;">Googleドライブからフォルダを選ぶ</button>
+    <div class="folderlist" id="folderList"></div>
+    <div class="hint" id="currentFolder">未選択</div>
+
+    <div class="btnrow" style="margin-top:16px; justify-content:flex-end;">
+      <button class="secondary" id="closeSettings">閉じる</button>
+      <button class="primary" id="saveSettings">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+const STORE_KEY = 'y1515_uploader_settings_v1';
+let settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+settings.resizeSize = settings.resizeSize || 1000;
+
+let files = []; // {id, file, blobUrl, status, resizedBlob}
+let accessToken = null;
+let tokenClient = null;
+
+const el = id => document.getElementById(id);
+
+function saveSettings() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(settings));
+}
+
+// ---------- Settings modal ----------
+el('openSettings').onclick = () => {
+  el('clientId').value = settings.clientId || '';
+  el('resizeSize').value = settings.resizeSize || 1000;
+  el('currentFolder').textContent = settings.folderName
+    ? `選択中: ${settings.folderName}` : '未選択';
+  el('settingsModal').classList.remove('hidden');
+};
+el('closeSettings').onclick = () => el('settingsModal').classList.add('hidden');
+el('saveSettings').onclick = () => {
+  settings.clientId = el('clientId').value.trim();
+  settings.resizeSize = parseInt(el('resizeSize').value, 10) || 1000;
+  saveSettings();
+  initGoogleAuth();
+  el('settingsModal').classList.add('hidden');
+};
+
+el('chooseFolder').onclick = async () => {
+  if (!accessToken) {
+    await ensureToken();
+  }
+  if (!accessToken) { alert('先にクライアントIDを保存してログインしてください'); return; }
+  const res = await fetch(
+    "https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id,name)&pageSize=50&orderBy=name",
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await res.json();
+  const list = el('folderList');
+  list.innerHTML = '';
+  (data.files || []).forEach(f => {
+    const div = document.createElement('div');
+    div.className = 'folderitem';
+    div.textContent = f.name;
+    div.onclick = () => {
+      settings.folderId = f.id;
+      settings.folderName = f.name;
+      saveSettings();
+      el('currentFolder').textContent = `選択中: ${f.name}`;
+      [...list.children].forEach(c => c.classList.remove('selected'));
+      div.classList.add('selected');
+    };
+    list.appendChild(div);
+  });
+  if (!data.files || !data.files.length) {
+    list.innerHTML = '<div class="hint">フォルダが見つからない（権限 or 該当なし）</div>';
+  }
+};
+
+// ---------- Google Auth ----------
+function initGoogleAuth() {
+  if (!settings.clientId || !window.google) return;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: settings.clientId,
+    scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',
+    callback: (resp) => {
+      if (resp && resp.access_token) accessToken = resp.access_token;
+    },
+  });
+}
+window.addEventListener('load', () => setTimeout(initGoogleAuth, 500));
+
+function ensureToken() {
+  return new Promise((resolve) => {
+    if (!tokenClient) { resolve(false); return; }
+    tokenClient.callback = (resp) => {
+      if (resp && resp.access_token) { accessToken = resp.access_token; resolve(true); }
+      else resolve(false);
+    };
+    tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
+  });
+}
+
+// ---------- File picking ----------
+el('pickCamera').onclick = () => el('fileCamera').click();
+el('pickGallery').onclick = () => el('fileGallery').click();
+el('fileCamera').onchange = e => addFiles(e.target.files);
+el('fileGallery').onchange = e => addFiles(e.target.files);
+
+function addFiles(fileList) {
+  [...fileList].forEach(file => {
+    const id = Math.random().toString(36).slice(2);
+    files.push({ id, file, status: 'wait' });
+  });
+  renderGrid();
+}
+
+function renderGrid() {
+  const grid = el('grid');
+  grid.innerHTML = '';
+  files.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'thumb';
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(item.file);
+    const status = document.createElement('div');
+    status.className = 'status ' + (
+      item.status === 'done' ? 'ok' : item.status === 'error' ? 'err' : 'wait'
+    );
+    status.textContent =
+      item.status === 'done' ? '完了' :
+      item.status === 'error' ? '失敗' :
+      item.status === 'uploading' ? '送信中…' : '待機';
+    const rm = document.createElement('button');
+    rm.className = 'remove';
+    rm.textContent = '×';
+    rm.onclick = () => { files = files.filter(f => f.id !== item.id); renderGrid(); };
+    div.appendChild(img);
+    div.appendChild(status);
+    div.appendChild(rm);
+    grid.appendChild(div);
+  });
+  el('info').firstChild.textContent = `${files.length} 枚選択中`;
+}
+
+el('clearAll').onclick = () => { files = []; renderGrid(); };
+
+// ---------- Resize (EXIF-safe, square crop) ----------
+async function resizeToSquare(file, size) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch (e) {
+    bitmap = await createImageBitmap(file);
+  }
+  const srcW = bitmap.width, srcH = bitmap.height;
+  const side = Math.min(srcW, srcH);
+  const sx = (srcW - side) / 2;
+  const sy = (srcH - side) / 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, size, size);
+
+  return new Promise(resolve => {
+    canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.9);
+  });
+}
+
+// ---------- Upload ----------
+el('uploadAll').onclick = async () => {
+  if (!settings.clientId) { alert('設定でクライアントIDを入れてください'); el('openSettings').click(); return; }
+  if (!settings.folderId) { alert('設定でアップロード先フォルダを選んでください'); el('openSettings').click(); return; }
+  if (!accessToken) {
+    const ok = await ensureToken();
+    if (!ok) { alert('Googleログインに失敗した'); return; }
+  }
+  const pending = files.filter(f => f.status !== 'done');
+  let doneCount = 0;
+  for (const item of pending) {
+    item.status = 'uploading';
+    renderGrid();
+    try {
+      const blob = await resizeToSquare(item.file, settings.resizeSize);
+      await uploadToDrive(blob, item.file.name, settings.folderId);
+      item.status = 'done';
+    } catch (e) {
+      console.error(e);
+      item.status = 'error';
+    }
+    doneCount++;
+    el('progressBar').style.width = `${Math.round(doneCount / pending.length * 100)}%`;
+    renderGrid();
+  }
+};
+
+async function uploadToDrive(blob, filename, folderId) {
+  const metadata = { name: filename.replace(/\.\w+$/, '') + '.jpg', parents: [folderId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', blob);
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error('upload failed: ' + txt);
+  }
+  return res.json();
+}
+</script>
+</body>
+</html>
