@@ -161,7 +161,8 @@
     <input type="text" id="resizeSize" placeholder="1000" value="1000">
 
     <label>アップロード先フォルダ</label>
-    <button class="secondary" id="chooseFolder" style="margin-top:6px;">Googleドライブからフォルダを選ぶ</button>
+    <input type="text" id="folderSearch" placeholder="フォルダ名で検索（例: 1515）">
+    <button class="secondary" id="chooseFolder" style="margin-top:6px;">この名前で検索</button>
     <div class="folderlist" id="folderList"></div>
     <div class="hint" id="currentFolder">未選択</div>
 
@@ -213,8 +214,11 @@ el('chooseFolder').onclick = async () => {
     await ensureToken();
   }
   if (!accessToken) { alert('先にクライアントIDを保存してログインしてください'); return; }
+  const term = el('folderSearch').value.trim();
+  let q = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+  if (term) q += ` and name contains '${term.replace(/'/g, "\\'")}'`;
   const res = await fetch(
-    "https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id,name)&pageSize=50&orderBy=name",
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=50&orderBy=name`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   const data = await res.json();
