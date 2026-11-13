@@ -174,9 +174,12 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
+const DEFAULT_CLIENT_ID = '174271920608-v6rbsu1f6r59kovibtnccu6eirnphkss.apps.googleusercontent.com';
+
 const STORE_KEY = 'y1515_uploader_settings_v1';
 let settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
 settings.resizeSize = settings.resizeSize || 1000;
+settings.clientId = settings.clientId || DEFAULT_CLIENT_ID;
 
 let files = []; // {id, file, blobUrl, status, resizedBlob}
 let accessToken = null;
