@@ -160,7 +160,7 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14e</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14f</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
@@ -198,7 +198,7 @@
     </div>
   </div>
   <div class="toast" id="toast">なぞって選択中（指を離すと終わり）</div>
-  <div class="selhint" id="selHint">タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。</div>
+  <div class="selhint" id="selHint">取り込んだ写真は全部チェック済みです。送りたくない写真だけ、タップしてチェックを外してください。チェックの付いた写真だけが送られます（長押ししてなぞると、まとめて外す・付けることもできます）。</div>
   <div class="grid" id="grid"></div>
 </main>
 
@@ -214,10 +214,6 @@
 <div class="modal hidden" id="settingsModal">
   <div class="modalcard">
     <h2>設定</h2>
-
-    <label>合言葉</label>
-    <input type="text" id="passKey" placeholder="教えてもらった合言葉">
-    <div class="hint">ともくんから届いたリンクを開くと自動で入ります。入っていれば変更不要。</div>
 
     <label>リサイズサイズ (px)</label>
     <input type="text" id="resizeSize" placeholder="1000" value="1000">
@@ -241,21 +237,11 @@ let settings = {};
 try { settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) {}
 settings.resizeSize = settings.resizeSize || 1000;
 settings.endpointUrl = settings.endpointUrl || DEFAULT_ENDPOINT_URL;
-settings.passKey = settings.passKey || '';
 settings.who = settings.who || '';
 settings.target = settings.target || '';
 const WHO_LIST = ['浅居', '嶋田'];
 const TARGET_LIST = [{ label: 'ヤフオク', sfx: 'Y' }, { label: '1515', sfx: '1515' }];
 
-// 合言葉つきリンク（...#k=合言葉）を開いたら保存して、アドレスから消す
-(() => {
-  const m = location.hash.match(/[#&]k=([^&]+)/);
-  if (m) {
-    settings.passKey = decodeURIComponent(m[1]);
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) {}
-    history.replaceState(null, '', location.pathname + location.search);
-  }
-})();
 
 let files = []; // {id, file, status, selected}
 
@@ -300,14 +286,12 @@ refreshFolderName();
 
 // ---------- Settings modal ----------
 el('openSettings').onclick = () => {
-  el('passKey').value = settings.passKey || '';
   el('resizeSize').value = settings.resizeSize || 1000;
   el('endpointUrl').value = settings.endpointUrl || '';
   el('settingsModal').classList.remove('hidden');
 };
 el('closeSettings').onclick = () => el('settingsModal').classList.add('hidden');
 el('saveSettings').onclick = () => {
-  settings.passKey = el('passKey').value.trim();
   settings.resizeSize = parseInt(el('resizeSize').value, 10) || 1000;
   settings.endpointUrl = el('endpointUrl').value.trim() || DEFAULT_ENDPOINT_URL;
   saveSettings();
@@ -412,7 +396,7 @@ function addFiles(fileList) {
   Promise.all(fresh.map(async it => {
     const t = await readTakenTime(it.file);
     it.today = !!t && dayKey(t) === todayStr();
-    if (it.today) it.selected = true;
+    it.selected = true;   // 取り込んだ写真は全部チェック済み。外したものだけ送らない
     updateView(it);
   })).then(updateSelectBar);
 }
@@ -539,7 +523,7 @@ el('clearAll').onclick = () => removeItems(files.map(f => f.id));
     el('paintModeBtn').className = paintMode ? 'primary' : 'secondary';
     el('selHint').textContent = paintMode
       ? 'なぞり選択が「入」：写真の上を指でなぞるだけで選べます（この間、写真の上では画面が動きません。スクロールは「切」に戻すか、写真の外側で）。'
-      : 'タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。';
+      : '取り込んだ写真は全部チェック済みです。送りたくない写真だけ、タップしてチェックを外してください。チェックの付いた写真だけが送られます。';
   };
 
   // スマホ（タッチ）
@@ -636,7 +620,6 @@ function blobToBase64(blob) {
 
 async function sendToEndpoint(blob, filename, folderName) {
   const body = JSON.stringify({
-    key: settings.passKey,
     who: settings.who,
     folder: folderName,
     name: filename.replace(/\.\w+$/, '') + '.jpg',
@@ -656,7 +639,6 @@ async function sendToEndpoint(blob, filename, folderName) {
 el('uploadAll').onclick = async () => {
   const folderName = el('folderNameInput').value.trim();
   if (!settings.endpointUrl || settings.endpointUrl === 'PASTE_WEBAPP_URL') { alert('受け口のURLが入っていません（設定を開いてください）'); el('openSettings').click(); return; }
-  if (!settings.passKey) { alert('合言葉が入っていません。ともくんから届いたリンクを開くか、設定に入れてください'); el('openSettings').click(); return; }
   if (!settings.who) { alert('担当者を選んでください'); return; }
   if (!settings.target) { alert('販売先（ヤフオク／1515）を選んでください'); return; }
   if (!folderName) { alert('保存先フォルダ名を入力してください'); return; }
