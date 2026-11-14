@@ -160,7 +160,7 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14h</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14i</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
@@ -622,8 +622,11 @@ const BATCH = 3, PARALLEL = 3;
 async function sendBatch(items, folderName) {
   const photos = [];
   for (const it of items) {
-    const blob = await resizeToSquare(it.file, settings.resizeSize);
-    photos.push({ name: it.file.name.replace(/\.\w+$/, '') + '.jpg', data: await blobToBase64(blob) });
+    if (!it.pre) {   // 縮小は1回だけ（再送のときは作り直さない）
+      const blob = await resizeToSquare(it.file, settings.resizeSize);
+      it.pre = { name: it.file.name.replace(/\.\w+$/, '') + '.jpg', data: await blobToBase64(blob) };
+    }
+    photos.push(it.pre);
   }
   // text/plain にすると事前確認（preflight）が走らず、Apps Script がそのまま受けられる
   const res = await fetch(settings.endpointUrl, {
@@ -634,6 +637,24 @@ async function sendBatch(items, folderName) {
   const j = await res.json();
   if (!j.ok) throw new Error(j.error || 'upload failed');
   return j.results || [];
+}
+
+// 失敗した写真だけを、元の写真のまま自動で最大4回まで送り直す（写真の名前は変えないので、並びは元のまま）
+async function sendWithRetry(items, folderName) {
+  const final = new Array(items.length).fill(null);
+  let todo = items.map((_, i) => i);
+  for (let attempt = 1; attempt <= 4 && todo.length; attempt++) {
+    if (attempt > 1) await new Promise(r => setTimeout(r, 1500 * (attempt - 1)));
+    try {
+      const results = await sendBatch(todo.map(i => items[i]), folderName);
+      const next = [];
+      todo.forEach((idx, k) => { if (results[k] && results[k].ok) final[idx] = results[k]; else next.push(idx); });
+      todo = next;
+    } catch (e) {
+      if (String(e.message) === 'auth') throw e;   // ログイン切れは再送しても無駄
+    }
+  }
+  return final;
 }
 
 el('uploadAll').onclick = async () => {
@@ -655,7 +676,7 @@ el('uploadAll').onclick = async () => {
       const items = queue.splice(0, BATCH);
       items.forEach(it => { it.status = 'uploading'; updateView(it); });
       try {
-        const results = await sendBatch(items, folderName);
+        const results = await sendWithRetry(items, folderName);
         items.forEach((it, i) => {
           if (results[i] && results[i].ok) { it.status = 'done'; it.selected = false; }
           else { it.status = 'error'; failed++; }
@@ -672,7 +693,7 @@ el('uploadAll').onclick = async () => {
   await Promise.all(Array.from({ length: PARALLEL }, worker));
   uploading = false; updateSelectBar();
   if (authFail) { idToken = ''; whoName = ''; showLogin('ログインの有効期限が切れました。もう一度ログインして、残りを送ってください。'); alert('ログインし直してください。送れなかった分は、ログイン後にもう一度「送る」で再送されます'); }
-  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。もう一度「送る」と、失敗分だけ再送します。`;
+  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。自動で何度か再送しましたがだめでした。もう一度「送る」と、失敗分だけ送り直します。`;
   else el('folderStatus').textContent = `【${whoName}】「${folderName}」に ${doneCount}枚、全部送れました`;
 };
 
