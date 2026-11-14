@@ -143,21 +143,35 @@
     width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #333945;
     background: #11141a; color: var(--text); font-size: 14px;
   }
+  .seg { display: flex; gap: 8px; margin-bottom: 4px; }
+  .seg button { flex: 1; padding: 12px 8px; font-size: 16px; background: #2a2e36; color: var(--text); border: 2px solid transparent; }
+  .seg button.on { background: var(--accent); color: #fff; border-color: #9ec0ff; }
+  .grid.paintmode { touch-action: none; }
+  .toast {
+    position: fixed; left: 50%; top: 64px; transform: translateX(-50%); z-index: 40;
+    background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: 600;
+    box-shadow: 0 2px 10px rgba(0,0,0,.5); pointer-events: none; display: none;
+  }
+  .ver { font-size: 11px; color: var(--sub); margin-left: 8px; font-weight: 400; }
   a { color: var(--accent); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー</h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14c</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
 <main>
   <div class="foldername-row">
+    <label>担当者（この人の写真フォルダに入ります）</label>
+    <div class="seg" id="whoSeg"></div>
+    <label>販売先</label>
+    <div class="seg" id="targetSeg"></div>
     <label>保存先フォルダ名</label>
-    <input type="text" id="folderNameInput" placeholder="例: 2026-11-13">
-    <div class="hint" id="folderStatus">この名前のフォルダに保存します（無ければ自動で作ります）。Googleログインは要りません。</div>
+    <input type="text" id="folderNameInput" placeholder="例: 2026.11.14_Y">
+    <div class="hint" id="folderStatus">担当者と販売先を選ぶと、フォルダ名が自動で決まります（日付_Y または 日付_1515）。同じ日に何回送っても同じフォルダに入ります。Googleログインは要りません。</div>
   </div>
 
   <div class="drop" id="drop">
@@ -173,11 +187,13 @@
   <div class="selectbar" id="selectBar" style="display:none;">
     <label><input type="checkbox" id="selectTodayBox"> 本日撮影分を全部選ぶ<span id="todayCount"></span></label>
     <div class="selbtns">
+      <button class="secondary" id="paintModeBtn">なぞり選択：切</button>
       <button class="secondary" id="selectAllBtn">全部</button>
       <button class="secondary" id="selectNone">解除</button>
       <button class="secondary" id="deleteSelected" style="display:none;">選択を削除</button>
     </div>
   </div>
+  <div class="toast" id="toast">なぞって選択中（指を離すと終わり）</div>
   <div class="selhint" id="selHint" style="display:none;">タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。</div>
   <div class="grid" id="grid"></div>
 </main>
@@ -222,6 +238,10 @@ try { settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e
 settings.resizeSize = settings.resizeSize || 1000;
 settings.endpointUrl = settings.endpointUrl || DEFAULT_ENDPOINT_URL;
 settings.passKey = settings.passKey || '';
+settings.who = settings.who || '';
+settings.target = settings.target || '';
+const WHO_LIST = ['浅居', '嶋田'];
+const TARGET_LIST = [{ label: 'ヤフオク', sfx: 'Y' }, { label: '1515', sfx: '1515' }];
 
 // 合言葉つきリンク（...#k=合言葉）を開いたら保存して、アドレスから消す
 (() => {
@@ -247,7 +267,32 @@ function todayStr() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-el('folderNameInput').value = todayStr();
+function dateDots() { const d = new Date(); return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`; }
+let folderEdited = false;
+function autoFolderName() {
+  const t = TARGET_LIST.find(x => x.label === settings.target);
+  return dateDots() + (t ? '_' + t.sfx : '');
+}
+function refreshFolderName() { if (!folderEdited) el('folderNameInput').value = autoFolderName(); }
+el('folderNameInput').oninput = () => { folderEdited = true; };
+function buildSeg(id, items, key) {
+  const box = el(id); box.innerHTML = '';
+  items.forEach(it => {
+    const label = typeof it === 'string' ? it : it.label;
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.className = settings[key] === label ? 'on' : '';
+    b.onclick = () => {
+      settings[key] = label; saveSettings();
+      [...box.children].forEach(c => c.classList.toggle('on', c === b));
+      refreshFolderName();
+    };
+    box.appendChild(b);
+  });
+}
+buildSeg('whoSeg', WHO_LIST, 'who');
+buildSeg('targetSeg', TARGET_LIST, 'target');
+refreshFolderName();
 
 // ---------- Settings modal ----------
 el('openSettings').onclick = () => {
@@ -466,10 +511,31 @@ el('clearAll').onclick = () => removeItems(files.map(f => f.id));
       if (id) apply(id);
     }, 16);
   }
+  let paintMode = false;
+  const toast = el('toast');
+  function beginPaint(id) {
+    painting = true;
+    const it = getItem(id);
+    paintValue = !(it && it.selected);
+    apply(id);
+    toast.style.display = 'block';
+    if (navigator.vibrate) navigator.vibrate(15);
+    startAutoScroll();
+  }
   function finish() {
     if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
     painting = false; pressId = null; stopAutoScroll();
+    toast.style.display = 'none';
   }
+  el('paintModeBtn').onclick = () => {
+    paintMode = !paintMode;
+    grid.classList.toggle('paintmode', paintMode);
+    el('paintModeBtn').textContent = paintMode ? 'なぞり選択：入' : 'なぞり選択：切';
+    el('paintModeBtn').className = paintMode ? 'primary' : 'secondary';
+    el('selHint').textContent = paintMode
+      ? 'なぞり選択が「入」：写真の上を指でなぞるだけで選べます（この間、写真の上では画面が動きません。スクロールは「切」に戻すか、写真の外側で）。'
+      : 'タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。';
+  };
 
   // スマホ（タッチ）
   grid.addEventListener('touchstart', e => {
@@ -479,15 +545,8 @@ el('clearAll').onclick = () => removeItems(files.map(f => f.id));
     const id = idAt(t.clientX, t.clientY);
     if (!id) return;
     pressId = id; startX = t.clientX; startY = t.clientY; moved = false; lastTouch = t;
-    pressTimer = setTimeout(() => {
-      pressTimer = null;
-      painting = true;
-      const it = getItem(pressId);
-      paintValue = !(it && it.selected);
-      apply(pressId);
-      if (navigator.vibrate) navigator.vibrate(15);
-      startAutoScroll();
-    }, LONG_PRESS_MS);
+    if (paintMode) { beginPaint(id); return; }
+    pressTimer = setTimeout(() => { pressTimer = null; beginPaint(pressId); }, LONG_PRESS_MS);
   }, { passive: true });
 
   grid.addEventListener('touchmove', e => {
@@ -573,6 +632,7 @@ function blobToBase64(blob) {
 async function sendToEndpoint(blob, filename, folderName) {
   const body = JSON.stringify({
     key: settings.passKey,
+    who: settings.who,
     folder: folderName,
     name: filename.replace(/\.\w+$/, '') + '.jpg',
     data: await blobToBase64(blob),
@@ -592,7 +652,10 @@ el('uploadAll').onclick = async () => {
   const folderName = el('folderNameInput').value.trim();
   if (!settings.endpointUrl || settings.endpointUrl === 'PASTE_WEBAPP_URL') { alert('受け口のURLが入っていません（設定を開いてください）'); el('openSettings').click(); return; }
   if (!settings.passKey) { alert('合言葉が入っていません。ともくんから届いたリンクを開くか、設定に入れてください'); el('openSettings').click(); return; }
+  if (!settings.who) { alert('担当者を選んでください'); return; }
+  if (!settings.target) { alert('販売先（ヤフオク／1515）を選んでください'); return; }
   if (!folderName) { alert('保存先フォルダ名を入力してください'); return; }
+  if (!/1515|ヤフオク|(^|[_\-\s.])[yYｙＹ]($|[_\-\s.])/.test(folderName)) { alert('フォルダ名に「_Y」か「_1515」が必要です（取り込みで販売先が分かるように）'); return; }
 
   const pending = files.filter(f => f.selected && f.status !== 'done');
   if (!pending.length) { alert('送る写真を選んでください'); return; }
@@ -621,7 +684,7 @@ el('uploadAll').onclick = async () => {
   uploading = false; updateSelectBar();
   if (authFail) alert('合言葉が違います。ともくんから届いたリンクを開き直してください');
   else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。選び直して、もう一度送ると失敗分だけ再送します。`;
-  else el('folderStatus').textContent = `保存先: 「${folderName}」フォルダ（${doneCount}枚、全部送れました）`;
+  else el('folderStatus').textContent = `【${settings.who}】「${folderName}」に ${doneCount}枚、全部送れました`;
 };</script>
 </body>
 </html>
