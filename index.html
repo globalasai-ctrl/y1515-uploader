@@ -160,7 +160,7 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14g</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14h</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
@@ -617,22 +617,23 @@ function blobToBase64(blob) {
   });
 }
 
-async function sendToEndpoint(blob, filename, folderName) {
-  const body = JSON.stringify({
-    idToken: idToken,
-    folder: folderName,
-    name: filename.replace(/\.\w+$/, '') + '.jpg',
-    data: await blobToBase64(blob),
-  });
+// 3枚ずつまとめて、3本同時に送る（1枚ずつ順番だった頃より何倍も速い）
+const BATCH = 3, PARALLEL = 3;
+async function sendBatch(items, folderName) {
+  const photos = [];
+  for (const it of items) {
+    const blob = await resizeToSquare(it.file, settings.resizeSize);
+    photos.push({ name: it.file.name.replace(/\.\w+$/, '') + '.jpg', data: await blobToBase64(blob) });
+  }
   // text/plain にすると事前確認（preflight）が走らず、Apps Script がそのまま受けられる
   const res = await fetch(settings.endpointUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body,
+    body: JSON.stringify({ idToken: idToken, folder: folderName, photos }),
   });
   const j = await res.json();
   if (!j.ok) throw new Error(j.error || 'upload failed');
-  return j;
+  return j.results || [];
 }
 
 el('uploadAll').onclick = async () => {
@@ -648,28 +649,30 @@ el('uploadAll').onclick = async () => {
   uploading = true; updateSelectBar();
   el('progressBar').style.width = '0%';
   let doneCount = 0, failed = 0, authFail = false;
-  for (const item of pending) {
-    item.status = 'uploading';
-    updateView(item);
-    try {
-      const blob = await resizeToSquare(item.file, settings.resizeSize);
-      await sendToEndpoint(blob, item.file.name, folderName);
-      item.status = 'done';
-      item.selected = false;
-    } catch (e) {
-      console.error(e);
-      item.status = 'error';
-      failed++;
-      if (String(e.message) === 'auth') authFail = true;
+  const queue = pending.slice();
+  const worker = async () => {
+    while (queue.length && !authFail) {
+      const items = queue.splice(0, BATCH);
+      items.forEach(it => { it.status = 'uploading'; updateView(it); });
+      try {
+        const results = await sendBatch(items, folderName);
+        items.forEach((it, i) => {
+          if (results[i] && results[i].ok) { it.status = 'done'; it.selected = false; }
+          else { it.status = 'error'; failed++; }
+          doneCount++; updateView(it);
+        });
+      } catch (e) {
+        console.error(e);
+        if (String(e.message) === 'auth') authFail = true;
+        items.forEach(it => { it.status = 'error'; failed++; doneCount++; updateView(it); });
+      }
+      el('progressBar').style.width = `${Math.round(doneCount / pending.length * 100)}%`;
     }
-    doneCount++;
-    el('progressBar').style.width = `${Math.round(doneCount / pending.length * 100)}%`;
-    updateView(item);
-    if (authFail) break;
-  }
+  };
+  await Promise.all(Array.from({ length: PARALLEL }, worker));
   uploading = false; updateSelectBar();
   if (authFail) { idToken = ''; whoName = ''; showLogin('ログインの有効期限が切れました。もう一度ログインして、残りを送ってください。'); alert('ログインし直してください。送れなかった分は、ログイン後にもう一度「送る」で再送されます'); }
-  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。選び直して、もう一度送ると失敗分だけ再送します。`;
+  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。もう一度「送る」と、失敗分だけ再送します。`;
   else el('folderStatus').textContent = `【${whoName}】「${folderName}」に ${doneCount}枚、全部送れました`;
 };
 
