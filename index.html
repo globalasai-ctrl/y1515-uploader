@@ -160,7 +160,7 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14i</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14j</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
@@ -179,11 +179,9 @@
     <div id="dropLabel">写真を選ぶ（複数選択OK）</div>
     <div class="btnrow">
       <button class="primary" id="pickCamera">📷 撮影</button>
-      <button class="secondary" id="pickGallery">🖼 ギャラリーから選ぶ</button>
       <button class="secondary" id="pickFiles">📁 ファイルから選ぶ</button>
     </div>
     <input type="file" id="fileCamera" accept="image/*" capture="environment">
-    <input type="file" id="fileGallery" accept="image/*" multiple>
     <input type="file" id="fileFiles" accept="image/*,application/pdf" multiple>
     <div class="hint" style="margin-top:10px;">たくさん選ぶなら「ファイルから選ぶ」：写真を長押しして指をなぞると続けて選べて、右上の ⋮ から「すべて選択」もできます（スマホのファイル選択画面の機能）。</div>
   </div>
@@ -299,11 +297,9 @@ el('saveSettings').onclick = () => {
 
 // ---------- File picking ----------
 el('pickCamera').onclick = () => el('fileCamera').click();
-el('pickGallery').onclick = () => el('fileGallery').click();
 el('pickFiles').onclick = () => el('fileFiles').click();
 el('fileFiles').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 el('fileCamera').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
-el('fileGallery').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 
 let uploading = false;
 const getItem = id => files.find(f => f.id === id);
@@ -694,7 +690,11 @@ el('uploadAll').onclick = async () => {
   uploading = false; updateSelectBar();
   if (authFail) { idToken = ''; whoName = ''; showLogin('ログインの有効期限が切れました。もう一度ログインして、残りを送ってください。'); alert('ログインし直してください。送れなかった分は、ログイン後にもう一度「送る」で再送されます'); }
   else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。自動で何度か再送しましたがだめでした。もう一度「送る」と、失敗分だけ送り直します。`;
-  else el('folderStatus').textContent = `【${whoName}】「${folderName}」に ${doneCount}枚、全部送れました`;
+  else {
+    // 全部送れたら、アプリ内の読み込み一覧を空にする（続けて次の写真を読み込める）。スマホ本体の元の写真には触らない
+    removeItems(files.map(f => f.id));
+    el('folderStatus').textContent = `【${whoName}】「${folderName}」に ${doneCount}枚、全部送れました。一覧は空にしました（スマホの写真は残っています）。続けて読み込めます。`;
+  }
 };
 
 // ---------- Googleログイン（担当者はメールから自動で決まる） ----------
