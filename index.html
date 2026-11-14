@@ -90,6 +90,7 @@
     -webkit-touch-callout: none;
   }
   .thumb.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .thumb .pic { width: 100%; height: 100%; background-size: cover; background-position: center; pointer-events: none; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
   .thumb .status {
     position: absolute; bottom: 0; left: 0; right: 0;
@@ -159,7 +160,7 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14c</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14d</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
@@ -184,7 +185,7 @@
     <input type="file" id="fileGallery" accept="image/*" multiple>
   </div>
 
-  <div class="selectbar" id="selectBar" style="display:none;">
+  <div class="selectbar" id="selectBar">
     <label><input type="checkbox" id="selectTodayBox"> 本日撮影分を全部選ぶ<span id="todayCount"></span></label>
     <div class="selbtns">
       <button class="secondary" id="paintModeBtn">なぞり選択：切</button>
@@ -194,7 +195,7 @@
     </div>
   </div>
   <div class="toast" id="toast">なぞって選択中（指を離すと終わり）</div>
-  <div class="selhint" id="selHint" style="display:none;">タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。</div>
+  <div class="selhint" id="selHint">タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。</div>
   <div class="grid" id="grid"></div>
 </main>
 
@@ -383,10 +384,10 @@ function runThumbQueue() {
     if (!files.includes(it)) continue;
     thumbBusy++;
     makeThumb(it.file).then(url => {
-      if (files.includes(it)) { it.thumbUrl = url; it.node.querySelector('img').src = url; }
+      if (files.includes(it)) { it.thumbUrl = url; it.node.querySelector('.pic').style.backgroundImage = 'url("' + url + '")'; }
       else URL.revokeObjectURL(url);
     }).catch(() => {
-      if (files.includes(it)) { it.thumbUrl = URL.createObjectURL(it.file); it.node.querySelector('img').src = it.thumbUrl; }
+      if (files.includes(it)) { it.thumbUrl = URL.createObjectURL(it.file); it.node.querySelector('.pic').style.backgroundImage = 'url("' + it.thumbUrl + '")'; }
     }).finally(() => { thumbBusy--; runThumbQueue(); });
   }
 }
@@ -416,8 +417,8 @@ function createNode(item) {
   const div = document.createElement('div');
   div.className = 'thumb';
   div.dataset.id = item.id;
-  const img = document.createElement('img');
-  img.draggable = false; img.alt = '';
+  const img = document.createElement('div');   // 画像ではなく背景で貼る（スマホの『画像の長押し』メニューや拡大表示を出さないため）
+  img.className = 'pic';
   const check = document.createElement('div'); check.className = 'checkmark';
   const status = document.createElement('div'); status.className = 'status wait';
   const rm = document.createElement('button');
@@ -459,8 +460,7 @@ function setSelected(id, value) {
 
 function updateSelectBar() {
   const has = files.length > 0;
-  el('selectBar').style.display = has ? 'flex' : 'none';
-  el('selHint').style.display = has ? 'block' : 'none';
+  // 選択バーは写真を入れる前から常に出しておく
   const sel = files.filter(f => f.selected).length;
   const todayItems = files.filter(f => f.today && f.status !== 'done');
   const todaySel = todayItems.filter(f => f.selected).length;
@@ -468,7 +468,7 @@ function updateSelectBar() {
   box.disabled = todayItems.length === 0;
   box.checked = todayItems.length > 0 && todaySel === todayItems.length;
   box.indeterminate = todaySel > 0 && todaySel < todayItems.length;
-  el('todayCount').textContent = todayItems.length ? `（${todayItems.length}枚）` : '（本日分なし）';
+  el('todayCount').textContent = !has ? '（写真を入れると使えます）' : todayItems.length ? `（${todayItems.length}枚）` : '（本日分なし）';
   el('deleteSelected').style.display = sel ? 'inline-block' : 'none';
   el('info').firstChild.textContent = `${sel} 枚選択中（全${files.length}枚）`;
   el('uploadAll').disabled = uploading || sel === 0;
@@ -685,6 +685,7 @@ el('uploadAll').onclick = async () => {
   if (authFail) alert('合言葉が違います。ともくんから届いたリンクを開き直してください');
   else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。選び直して、もう一度送ると失敗分だけ再送します。`;
   else el('folderStatus').textContent = `【${settings.who}】「${folderName}」に ${doneCount}枚、全部送れました`;
-};</script>
+};updateSelectBar();
+</script>
 </body>
 </html>
