@@ -63,9 +63,13 @@
   button:disabled { opacity: 0.4; }
   input[type=file] { display: none; }
   .selectbar {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 4px 2px 10px; font-size: 14px; color: var(--sub);
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    padding: 4px 2px 6px; font-size: 14px; color: var(--text);
   }
+  .selectbar button { padding: 6px 12px; font-size: 13px; }
+  .selbtns { display: flex; gap: 6px; }
+  .selectbar label span { color: var(--sub); }
+  .selhint { font-size: 12px; color: var(--sub); padding: 0 2px 10px; line-height: 1.5; }
   .selectbar label { display: flex; align-items: center; gap: 6px; }
   .selectbar input[type=checkbox] { width: 18px; height: 18px; }
   .grid {
@@ -73,6 +77,7 @@
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     gap: 8px;
     touch-action: pan-y;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
   .thumb {
     position: relative;
@@ -82,6 +87,7 @@
     background: #222;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   .thumb.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
@@ -165,10 +171,14 @@
   </div>
 
   <div class="selectbar" id="selectBar" style="display:none;">
-    <label><input type="checkbox" id="selectAllBox"> 全選択（長押し→指をずらすと複数選択できます）</label>
-    <button class="secondary" id="deleteSelected" style="display:none;">選択を削除</button>
+    <label><input type="checkbox" id="selectTodayBox"> 本日撮影分を全部選ぶ<span id="todayCount"></span></label>
+    <div class="selbtns">
+      <button class="secondary" id="selectAllBtn">全部</button>
+      <button class="secondary" id="selectNone">解除</button>
+      <button class="secondary" id="deleteSelected" style="display:none;">選択を削除</button>
+    </div>
   </div>
-
+  <div class="selhint" id="selHint" style="display:none;">タップで1枚ずつ入れる・外す。長押ししたまま指をスライドすると、なぞった写真をまとめて選べます（もう一度なぞると外れます）。選んだ写真だけが送られます。</div>
   <div class="grid" id="grid"></div>
 </main>
 
@@ -178,7 +188,7 @@
     <div class="progress"><div id="progressBar"></div></div>
   </div>
   <button class="secondary" id="clearAll">クリア</button>
-  <button class="primary" id="uploadAll">アップロード</button>
+  <button class="primary" id="uploadAll">選んだ分を送る</button>
 </div>
 
 <div class="modal hidden" id="settingsModal">
@@ -258,162 +268,271 @@ el('saveSettings').onclick = () => {
 // ---------- File picking ----------
 el('pickCamera').onclick = () => el('fileCamera').click();
 el('pickGallery').onclick = () => el('fileGallery').click();
-el('fileCamera').onchange = e => addFiles(e.target.files);
-el('fileGallery').onchange = e => addFiles(e.target.files);
+el('fileCamera').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+el('fileGallery').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 
-function addFiles(fileList) {
-  [...fileList].forEach(file => {
-    const id = Math.random().toString(36).slice(2);
-    files.push({ id, file, status: 'wait', selected: false });
-  });
-  renderGrid();
+let uploading = false;
+const getItem = id => files.find(f => f.id === id);
+function dayKey(ms) {
+  const d = new Date(ms), pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function renderGrid() {
-  const grid = el('grid');
-  grid.innerHTML = '';
-  files.forEach(item => {
-    const div = document.createElement('div');
-    div.className = 'thumb' + (item.selected ? ' selected' : '');
-    div.dataset.id = item.id;
+// 撮影日時：EXIFのDateTimeOriginalを読む。無ければファイルの更新日時
+function parseExifDate(dv) {
+  if (dv.byteLength < 4 || dv.getUint16(0) !== 0xFFD8) return 0;
+  let off = 2;
+  while (off + 4 < dv.byteLength) {
+    const marker = dv.getUint16(off), len = dv.getUint16(off + 2);
+    if (marker === 0xFFE1 && dv.getUint32(off + 4) === 0x45786966) {
+      const t = off + 10;
+      const little = dv.getUint16(t) === 0x4949;
+      const u16 = o => dv.getUint16(t + o, little), u32 = o => dv.getUint32(t + o, little);
+      const find = (ifd, want) => {
+        const n = u16(ifd);
+        for (let i = 0; i < n; i++) { const e = ifd + 2 + i * 12; if (u16(e) === want) return { count: u32(e + 4), val: e + 8 }; }
+        return null;
+      };
+      const ifd0 = u32(4);
+      const ptr = find(ifd0, 0x8769);
+      let tag = null;
+      if (ptr) { const exif = u32(ptr.val); tag = find(exif, 0x9003) || find(exif, 0x9004); }
+      if (!tag) tag = find(ifd0, 0x0132);
+      if (tag && tag.count >= 19) {
+        const so = u32(tag.val);
+        let str = '';
+        for (let i = 0; i < 19; i++) str += String.fromCharCode(dv.getUint8(t + so + i));
+        const m = str.match(/(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/);
+        if (m) return new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+      }
+      return 0;
+    }
+    if ((marker & 0xFF00) !== 0xFF00) break;
+    off += 2 + len;
+  }
+  return 0;
+}
+async function readTakenTime(file) {
+  try {
+    const buf = await file.slice(0, 131072).arrayBuffer();
+    const t = parseExifDate(new DataView(buf));
+    if (t) return t;
+  } catch (e) {}
+  return file.lastModified || 0;
+}
 
-    const img = document.createElement('img');
-    img.src = URL.createObjectURL(item.file);
+// サムネイルは小さく作って軽くする（順番に2枚ずつ）
+const thumbQueue = []; let thumbBusy = 0;
+async function makeThumb(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const side = Math.min(bmp.width, bmp.height), S = 200;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, S, S);
+  if (bmp.close) bmp.close();
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.7));
+  return URL.createObjectURL(blob);
+}
+function runThumbQueue() {
+  while (thumbBusy < 2 && thumbQueue.length) {
+    const it = thumbQueue.shift();
+    if (!files.includes(it)) continue;
+    thumbBusy++;
+    makeThumb(it.file).then(url => {
+      if (files.includes(it)) { it.thumbUrl = url; it.node.querySelector('img').src = url; }
+      else URL.revokeObjectURL(url);
+    }).catch(() => {
+      if (files.includes(it)) { it.thumbUrl = URL.createObjectURL(it.file); it.node.querySelector('img').src = it.thumbUrl; }
+    }).finally(() => { thumbBusy--; runThumbQueue(); });
+  }
+}
 
-    const check = document.createElement('div');
-    check.className = 'checkmark';
-    check.textContent = item.selected ? '✓' : '';
-
-    const status = document.createElement('div');
-    status.className = 'status ' + (
-      item.status === 'done' ? 'ok' : item.status === 'error' ? 'err' : 'wait'
-    );
-    status.textContent =
-      item.status === 'done' ? '完了' :
-      item.status === 'error' ? '失敗' :
-      item.status === 'uploading' ? '送信中…' : '待機';
-
-    const rm = document.createElement('button');
-    rm.className = 'remove';
-    rm.textContent = '×';
-    rm.onclick = (ev) => {
-      ev.stopPropagation();
-      files = files.filter(f => f.id !== item.id);
-      renderGrid();
-    };
-
-    div.appendChild(img);
-    div.appendChild(check);
-    div.appendChild(status);
-    div.appendChild(rm);
-    grid.appendChild(div);
+function addFiles(fileList) {
+  const list = [...fileList];
+  const fresh = [];
+  list.forEach(file => {
+    if (files.some(f => f.file.name === file.name && f.file.size === file.size && f.file.lastModified === file.lastModified)) return;
+    const item = { id: Math.random().toString(36).slice(2), file, status: 'wait', selected: false, today: false, thumbUrl: null, node: null };
+    files.push(item); fresh.push(item); createNode(item);
   });
-  el('info').firstChild.textContent = `${files.length} 枚選択中`;
+  updateSelectBar();
+  fresh.forEach(it => thumbQueue.push(it));
+  runThumbQueue();
+  // 本日撮影分は最初から選んだ状態にする
+  Promise.all(fresh.map(async it => {
+    const t = await readTakenTime(it.file);
+    it.today = !!t && dayKey(t) === todayStr();
+    if (it.today) it.selected = true;
+    updateView(it);
+  })).then(updateSelectBar);
+}
+
+// ---------- Grid（1枚ずつ作って、選択のたびに作り直さない） ----------
+function createNode(item) {
+  const div = document.createElement('div');
+  div.className = 'thumb';
+  div.dataset.id = item.id;
+  const img = document.createElement('img');
+  img.draggable = false; img.alt = '';
+  const check = document.createElement('div'); check.className = 'checkmark';
+  const status = document.createElement('div'); status.className = 'status wait';
+  const rm = document.createElement('button');
+  rm.className = 'remove'; rm.textContent = '×';
+  rm.onclick = ev => { ev.stopPropagation(); removeItems([item.id]); };
+  div.append(img, check, status, rm);
+  el('grid').appendChild(div);
+  item.node = div;
+  updateView(item);
+}
+
+function updateView(item) {
+  const n = item.node; if (!n) return;
+  n.classList.toggle('selected', item.selected);
+  n.querySelector('.checkmark').textContent = item.selected ? '✓' : '';
+  const st = n.querySelector('.status');
+  st.className = 'status ' + (item.status === 'done' ? 'ok' : item.status === 'error' ? 'err' : 'wait');
+  st.textContent = item.status === 'done' ? '完了' : item.status === 'error' ? '失敗' :
+    item.status === 'uploading' ? '送信中…' : (item.today ? '本日' : '');
+  st.style.display = st.textContent ? '' : 'none';
+}
+
+function removeItems(ids) {
+  files.filter(f => ids.includes(f.id)).forEach(f => {
+    if (f.thumbUrl) URL.revokeObjectURL(f.thumbUrl);
+    if (f.node) f.node.remove();
+  });
+  files = files.filter(f => !ids.includes(f.id));
   updateSelectBar();
 }
 
-function updateSelectBar() {
-  const bar = el('selectBar');
-  bar.style.display = files.length ? 'flex' : 'none';
-  const selectedCount = files.filter(f => f.selected).length;
-  el('deleteSelected').style.display = selectedCount ? 'inline-block' : 'none';
-  const allBox = el('selectAllBox');
-  allBox.checked = files.length > 0 && selectedCount === files.length;
-  allBox.indeterminate = selectedCount > 0 && selectedCount < files.length;
-}
-
-el('selectAllBox').onchange = () => {
-  const checked = el('selectAllBox').checked;
-  files.forEach(f => f.selected = checked);
-  renderGrid();
-};
-
-el('deleteSelected').onclick = () => {
-  files = files.filter(f => !f.selected);
-  renderGrid();
-};
-
-el('clearAll').onclick = () => { files = []; renderGrid(); };
-
-function findThumbIdAtPoint(x, y) {
-  const node = document.elementFromPoint(x, y);
-  const thumb = node && node.closest ? node.closest('.thumb') : null;
-  return thumb ? thumb.dataset.id : null;
-}
-
 function setSelected(id, value) {
-  const item = files.find(f => f.id === id);
-  if (!item || item.selected === value) return false;
+  const item = getItem(id);
+  if (!item || item.status === 'done' || item.selected === value) return false;
   item.selected = value;
+  updateView(item);
   return true;
 }
 
-// ---------- Tap to toggle / long-press + drag to multi-select ----------
+function updateSelectBar() {
+  const has = files.length > 0;
+  el('selectBar').style.display = has ? 'flex' : 'none';
+  el('selHint').style.display = has ? 'block' : 'none';
+  const sel = files.filter(f => f.selected).length;
+  const todayItems = files.filter(f => f.today && f.status !== 'done');
+  const todaySel = todayItems.filter(f => f.selected).length;
+  const box = el('selectTodayBox');
+  box.disabled = todayItems.length === 0;
+  box.checked = todayItems.length > 0 && todaySel === todayItems.length;
+  box.indeterminate = todaySel > 0 && todaySel < todayItems.length;
+  el('todayCount').textContent = todayItems.length ? `（${todayItems.length}枚）` : '（本日分なし）';
+  el('deleteSelected').style.display = sel ? 'inline-block' : 'none';
+  el('info').firstChild.textContent = `${sel} 枚選択中（全${files.length}枚）`;
+  el('uploadAll').disabled = uploading || sel === 0;
+}
+
+el('selectTodayBox').onchange = () => {
+  const v = el('selectTodayBox').checked;
+  files.forEach(f => { if (f.today) setSelected(f.id, v); });
+  updateSelectBar();
+};
+el('selectAllBtn').onclick = () => { files.forEach(f => setSelected(f.id, true)); updateSelectBar(); };
+el('selectNone').onclick = () => { files.forEach(f => setSelected(f.id, false)); updateSelectBar(); };
+el('deleteSelected').onclick = () => removeItems(files.filter(f => f.selected).map(f => f.id));
+el('clearAll').onclick = () => removeItems(files.map(f => f.id));
+
+// ---------- タップで切り替え／長押し→そのままスライドでまとめて選択 ----------
 (() => {
   const grid = el('grid');
-  let longPressTimer = null;
-  let dragMode = false;
-  let dragValue = true; // the selection state being painted while dragging
-  let startX = 0, startY = 0;
-  let activeId = null;
-  const LONG_PRESS_MS = 320;
-  const MOVE_CANCEL_PX = 10;
+  const LONG_PRESS_MS = 300, MOVE_CANCEL_PX = 10;
+  let pressTimer = null, painting = false, paintValue = true;
+  let pressId = null, startX = 0, startY = 0, moved = false, lastTouch = null, scrollTimer = null;
 
-  function clearTimer() {
-    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  const idAt = (x, y) => {
+    const node = document.elementFromPoint(x, y);
+    const th = node && node.closest ? node.closest('.thumb') : null;
+    return th ? th.dataset.id : null;
+  };
+  const apply = id => { if (setSelected(id, paintValue)) updateSelectBar(); };
+
+  function stopAutoScroll() { if (scrollTimer) { clearInterval(scrollTimer); scrollTimer = null; } }
+  function startAutoScroll() {
+    stopAutoScroll();
+    scrollTimer = setInterval(() => {
+      if (!lastTouch) return;
+      const y = lastTouch.clientY;
+      if (y < 110) window.scrollBy(0, -14);
+      else if (y > window.innerHeight - 130) window.scrollBy(0, 14);
+      else return;
+      const id = idAt(lastTouch.clientX, lastTouch.clientY);
+      if (id) apply(id);
+    }, 16);
+  }
+  function finish() {
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+    painting = false; pressId = null; stopAutoScroll();
   }
 
-  grid.addEventListener('pointerdown', (e) => {
-    const thumb = e.target.closest ? e.target.closest('.thumb') : null;
-    if (!thumb || e.target.closest('.remove')) return;
-    activeId = thumb.dataset.id;
-    startX = e.clientX; startY = e.clientY;
-    dragMode = false;
-    clearTimer();
-    longPressTimer = setTimeout(() => {
-      dragMode = true;
-      const item = files.find(f => f.id === activeId);
-      dragValue = !(item && item.selected);
-      if (setSelected(activeId, dragValue)) renderGrid();
-      grid.style.touchAction = 'none';
+  // スマホ（タッチ）
+  grid.addEventListener('touchstart', e => {
+    finish();
+    if (e.touches.length !== 1 || (e.target.closest && e.target.closest('.remove'))) return;
+    const t = e.touches[0];
+    const id = idAt(t.clientX, t.clientY);
+    if (!id) return;
+    pressId = id; startX = t.clientX; startY = t.clientY; moved = false; lastTouch = t;
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      painting = true;
+      const it = getItem(pressId);
+      paintValue = !(it && it.selected);
+      apply(pressId);
       if (navigator.vibrate) navigator.vibrate(15);
+      startAutoScroll();
     }, LONG_PRESS_MS);
-  });
+  }, { passive: true });
 
-  grid.addEventListener('pointermove', (e) => {
-    if (dragMode) {
-      const id = findThumbIdAtPoint(e.clientX, e.clientY);
-      if (id && setSelected(id, dragValue)) renderGrid();
-      e.preventDefault();
+  grid.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    lastTouch = t;
+    if (painting) {
+      e.preventDefault();   // 長押しのあとはスクロールさせず、なぞった写真を選ぶ
+      const id = idAt(t.clientX, t.clientY);
+      if (id) apply(id);
       return;
     }
-    if (longPressTimer) {
-      const dx = e.clientX - startX, dy = e.clientY - startY;
-      if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) clearTimer();
+    if (pressTimer && Math.hypot(t.clientX - startX, t.clientY - startY) > MOVE_CANCEL_PX) {
+      clearTimeout(pressTimer); pressTimer = null; moved = true;
     }
   }, { passive: false });
 
-  function finishPress(e) {
-    const wasDragging = dragMode;
-    clearTimer();
-    dragMode = false;
-    grid.style.touchAction = 'pan-y';
-    if (!wasDragging && activeId) {
-      const id = activeId;
-      if (setSelected(id, !files.find(f => f.id === id)?.selected)) renderGrid();
-    }
-    activeId = null;
-  }
+  grid.addEventListener('touchend', e => {
+    const wasPainting = painting;
+    const tap = !wasPainting && pressId && !moved;
+    const id = pressId;
+    finish();
+    if (wasPainting) { e.preventDefault(); return; }
+    if (tap) { const it = getItem(id); if (it && setSelected(id, !it.selected)) updateSelectBar(); }
+  }, { passive: false });
+  grid.addEventListener('touchcancel', finish);
+  grid.addEventListener('contextmenu', e => e.preventDefault());
 
-  grid.addEventListener('pointerup', finishPress);
-  grid.addEventListener('pointercancel', finishPress);
-  grid.addEventListener('pointerleave', (e) => {
-    // Only cancel the long-press timer (not an active drag) when the
-    // pointer leaves the grid without being released, e.g. scroll start.
-    if (!dragMode) clearTimer();
+  // パソコン（マウス）：押したまま動かすとなぞって選べる
+  let mouseDown = false;
+  grid.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse' || e.button !== 0 || (e.target.closest && e.target.closest('.remove'))) return;
+    const id = idAt(e.clientX, e.clientY);
+    if (!id) return;
+    const it = getItem(id);
+    paintValue = !(it && it.selected);
+    mouseDown = true;
+    apply(id);
   });
+  grid.addEventListener('pointermove', e => {
+    if (!mouseDown || e.pointerType !== 'mouse') return;
+    const id = idAt(e.clientX, e.clientY);
+    if (id) apply(id);
+  });
+  window.addEventListener('pointerup', () => { mouseDown = false; });
 })();
-
 // ---------- Resize (EXIF-safe, square crop) ----------
 async function resizeToSquare(file, size) {
   // createImageBitmap with imageOrientation:'from-image' fixes the
@@ -475,30 +594,34 @@ el('uploadAll').onclick = async () => {
   if (!settings.passKey) { alert('合言葉が入っていません。ともくんから届いたリンクを開くか、設定に入れてください'); el('openSettings').click(); return; }
   if (!folderName) { alert('保存先フォルダ名を入力してください'); return; }
 
-  const pending = files.filter(f => f.status !== 'done');
+  const pending = files.filter(f => f.selected && f.status !== 'done');
+  if (!pending.length) { alert('送る写真を選んでください'); return; }
+  uploading = true; updateSelectBar();
+  el('progressBar').style.width = '0%';
   let doneCount = 0, failed = 0, authFail = false;
   for (const item of pending) {
     item.status = 'uploading';
-    renderGrid();
+    updateView(item);
     try {
       const blob = await resizeToSquare(item.file, settings.resizeSize);
       await sendToEndpoint(blob, item.file.name, folderName);
       item.status = 'done';
+      item.selected = false;
     } catch (e) {
       console.error(e);
       item.status = 'error';
       failed++;
-      if (String(e.message) === 'auth') { authFail = true; }
+      if (String(e.message) === 'auth') authFail = true;
     }
     doneCount++;
     el('progressBar').style.width = `${Math.round(doneCount / pending.length * 100)}%`;
-    renderGrid();
+    updateView(item);
     if (authFail) break;
   }
+  uploading = false; updateSelectBar();
   if (authFail) alert('合言葉が違います。ともくんから届いたリンクを開き直してください');
-  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。もう一度アップロードを押すと失敗分だけ再送します。`;
-  else el('folderStatus').textContent = `保存先: 「${folderName}」フォルダ（全部送れました）`;
-};
-</script>
+  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。選び直して、もう一度送ると失敗分だけ再送します。`;
+  else el('folderStatus').textContent = `保存先: 「${folderName}」フォルダ（${doneCount}枚、全部送れました）`;
+};</script>
 </body>
 </html>
