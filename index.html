@@ -151,7 +151,7 @@
   <div class="foldername-row">
     <label>保存先フォルダ名</label>
     <input type="text" id="folderNameInput" placeholder="例: 2026-11-13">
-    <div class="hint" id="folderStatus">指定の親フォルダの中に、このフォルダ名で保存します（無ければ自動作成）。</div>
+    <div class="hint" id="folderStatus">この名前のフォルダに保存します（無ければ自動で作ります）。Googleログインは要りません。</div>
   </div>
 
   <div class="drop" id="drop">
@@ -185,16 +185,16 @@
   <div class="modalcard">
     <h2>設定</h2>
 
-    <label>Google OAuth クライアントID</label>
-    <input type="text" id="clientId" placeholder="xxxx.apps.googleusercontent.com">
-    <div class="hint">通常は変更不要（埋め込み済み）。</div>
+    <label>合言葉</label>
+    <input type="text" id="passKey" placeholder="教えてもらった合言葉">
+    <div class="hint">ともくんから届いたリンクを開くと自動で入ります。入っていれば変更不要。</div>
 
     <label>リサイズサイズ (px)</label>
     <input type="text" id="resizeSize" placeholder="1000" value="1000">
 
-    <label>保存先の親フォルダID</label>
-    <input type="text" id="parentFolderId">
-    <div class="hint">Googleドライブのフォルダ URL にある ID の部分。この中に、トップ画面で指定した名前のフォルダを探す/作成します。</div>
+    <label>受け口のURL</label>
+    <input type="text" id="endpointUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    <div class="hint">通常は変更不要（埋め込み済み）。写真はともくんのドライブへ届きます。</div>
 
     <div class="btnrow" style="margin-top:16px; justify-content:flex-end;">
       <button class="secondary" id="closeSettings">閉じる</button>
@@ -203,26 +203,32 @@
   </div>
 </div>
 
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
-const DEFAULT_CLIENT_ID = '174271920608-v6rbsu1f6r59kovibtnccu6eirnphkss.apps.googleusercontent.com';
-const DEFAULT_PARENT_FOLDER_ID = '1FIe-tj7yaMOhIDVC76aTWKMU9HTaP_L3';
+const DEFAULT_ENDPOINT_URL = 'https://script.google.com/macros/s/AKfycbxOhd-exRLlPMVUdVuMZBqr0CuaS7DJ7vQVLBOLMYPiU3orppPkN0ZGDTQRHVaiK2OO/exec';
 
-const STORE_KEY = 'y1515_uploader_settings_v1';
-let settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+const STORE_KEY = 'y1515_uploader_settings_v2';
+let settings = {};
+try { settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) {}
 settings.resizeSize = settings.resizeSize || 1000;
-settings.clientId = settings.clientId || DEFAULT_CLIENT_ID;
-settings.parentFolderId = settings.parentFolderId || DEFAULT_PARENT_FOLDER_ID;
+settings.endpointUrl = settings.endpointUrl || DEFAULT_ENDPOINT_URL;
+settings.passKey = settings.passKey || '';
+
+// 合言葉つきリンク（...#k=合言葉）を開いたら保存して、アドレスから消す
+(() => {
+  const m = location.hash.match(/[#&]k=([^&]+)/);
+  if (m) {
+    settings.passKey = decodeURIComponent(m[1]);
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) {}
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+})();
 
 let files = []; // {id, file, status, selected}
-let accessToken = null;
-let tokenClient = null;
-const folderCache = {}; // name -> id
 
 const el = id => document.getElementById(id);
 
 function saveSettings() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(settings));
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) {}
 }
 
 function todayStr() {
@@ -235,80 +241,19 @@ el('folderNameInput').value = todayStr();
 
 // ---------- Settings modal ----------
 el('openSettings').onclick = () => {
-  el('clientId').value = settings.clientId || '';
+  el('passKey').value = settings.passKey || '';
   el('resizeSize').value = settings.resizeSize || 1000;
-  el('parentFolderId').value = settings.parentFolderId || '';
+  el('endpointUrl').value = settings.endpointUrl || '';
   el('settingsModal').classList.remove('hidden');
 };
 el('closeSettings').onclick = () => el('settingsModal').classList.add('hidden');
 el('saveSettings').onclick = () => {
-  settings.clientId = el('clientId').value.trim() || DEFAULT_CLIENT_ID;
+  settings.passKey = el('passKey').value.trim();
   settings.resizeSize = parseInt(el('resizeSize').value, 10) || 1000;
-  settings.parentFolderId = el('parentFolderId').value.trim() || DEFAULT_PARENT_FOLDER_ID;
+  settings.endpointUrl = el('endpointUrl').value.trim() || DEFAULT_ENDPOINT_URL;
   saveSettings();
-  initGoogleAuth();
   el('settingsModal').classList.add('hidden');
 };
-
-// ---------- Google Auth ----------
-function initGoogleAuth() {
-  if (!settings.clientId || !window.google) return;
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: settings.clientId,
-    scope: 'https://www.googleapis.com/auth/drive.file',
-    callback: (resp) => {
-      if (resp && resp.access_token) accessToken = resp.access_token;
-    },
-  });
-}
-window.addEventListener('load', () => setTimeout(initGoogleAuth, 500));
-
-function ensureToken() {
-  return new Promise((resolve) => {
-    if (!tokenClient) { resolve(false); return; }
-    tokenClient.callback = (resp) => {
-      if (resp && resp.access_token) { accessToken = resp.access_token; resolve(true); }
-      else resolve(false);
-    };
-    tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
-  });
-}
-
-// Find or create a subfolder with the given name inside the parent folder.
-async function getOrCreateFolder(name) {
-  if (folderCache[name]) return folderCache[name];
-
-  const q = `'${settings.parentFolderId}' in parents and name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const searchRes = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-  const searchData = await searchRes.json();
-  if (searchData.files && searchData.files.length) {
-    folderCache[name] = searchData.files[0].id;
-    return folderCache[name];
-  }
-
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [settings.parentFolderId],
-    }),
-  });
-  if (!createRes.ok) {
-    const txt = await createRes.text();
-    throw new Error('フォルダ作成失敗: ' + txt);
-  }
-  const created = await createRes.json();
-  folderCache[name] = created.id;
-  return folderCache[name];
-}
 
 // ---------- File picking ----------
 el('pickCamera').onclick = () => el('fileCamera').click();
@@ -496,64 +441,64 @@ async function resizeToSquare(file, size) {
   });
 }
 
-// ---------- Upload ----------
+// ---------- Upload（ともくんのドライブの受け口へ送る。Googleログインなし） ----------
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+async function sendToEndpoint(blob, filename, folderName) {
+  const body = JSON.stringify({
+    key: settings.passKey,
+    folder: folderName,
+    name: filename.replace(/\.\w+$/, '') + '.jpg',
+    data: await blobToBase64(blob),
+  });
+  // text/plain にすると事前確認（preflight）が走らず、Apps Script がそのまま受けられる
+  const res = await fetch(settings.endpointUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body,
+  });
+  const j = await res.json();
+  if (!j.ok) throw new Error(j.error || 'upload failed');
+  return j;
+}
+
 el('uploadAll').onclick = async () => {
   const folderName = el('folderNameInput').value.trim();
-  if (!settings.clientId) { alert('設定でクライアントIDを入れてください'); el('openSettings').click(); return; }
-  if (!settings.parentFolderId) { alert('設定で保存先の親フォルダIDを入れてください'); el('openSettings').click(); return; }
+  if (!settings.endpointUrl || settings.endpointUrl === 'PASTE_WEBAPP_URL') { alert('受け口のURLが入っていません（設定を開いてください）'); el('openSettings').click(); return; }
+  if (!settings.passKey) { alert('合言葉が入っていません。ともくんから届いたリンクを開くか、設定に入れてください'); el('openSettings').click(); return; }
   if (!folderName) { alert('保存先フォルダ名を入力してください'); return; }
-  if (!accessToken) {
-    const ok = await ensureToken();
-    if (!ok) { alert('Googleログインに失敗した'); return; }
-  }
-
-  let folderId;
-  try {
-    el('folderStatus').textContent = `「${folderName}」フォルダを確認中…`;
-    folderId = await getOrCreateFolder(folderName);
-    el('folderStatus').textContent = `保存先: 「${folderName}」フォルダ`;
-  } catch (e) {
-    console.error(e);
-    alert('フォルダの準備に失敗した: ' + e.message);
-    return;
-  }
 
   const pending = files.filter(f => f.status !== 'done');
-  let doneCount = 0;
+  let doneCount = 0, failed = 0, authFail = false;
   for (const item of pending) {
     item.status = 'uploading';
     renderGrid();
     try {
       const blob = await resizeToSquare(item.file, settings.resizeSize);
-      await uploadToDrive(blob, item.file.name, folderId);
+      await sendToEndpoint(blob, item.file.name, folderName);
       item.status = 'done';
     } catch (e) {
       console.error(e);
       item.status = 'error';
+      failed++;
+      if (String(e.message) === 'auth') { authFail = true; }
     }
     doneCount++;
     el('progressBar').style.width = `${Math.round(doneCount / pending.length * 100)}%`;
     renderGrid();
+    if (authFail) break;
   }
+  if (authFail) alert('合言葉が違います。ともくんから届いたリンクを開き直してください');
+  else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。もう一度アップロードを押すと失敗分だけ再送します。`;
+  else el('folderStatus').textContent = `保存先: 「${folderName}」フォルダ（全部送れました）`;
 };
-
-async function uploadToDrive(blob, filename, folderId) {
-  const metadata = { name: filename.replace(/\.\w+$/, '') + '.jpg', parents: [folderId] };
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', blob);
-
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}` },
-    body: form,
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error('upload failed: ' + txt);
-  }
-  return res.json();
-}
 </script>
 </body>
 </html>
