@@ -160,19 +160,19 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14f</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14g</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
 <main>
   <div class="foldername-row">
-    <label>担当者（この人の写真フォルダに入ります）</label>
-    <div class="seg" id="whoSeg"></div>
+    <label>ログイン（担当者は自動で決まります）</label>
+    <div id="loginBox"><div id="gbtn"></div><div class="hint" id="whoLine">Googleでログインしてください。</div></div>
     <label>販売先</label>
     <div class="seg" id="targetSeg"></div>
     <label>保存先フォルダ名</label>
     <input type="text" id="folderNameInput" placeholder="例: 2026.11.14_Y">
-    <div class="hint" id="folderStatus">担当者と販売先を選ぶと、フォルダ名が自動で決まります（日付_Y または 日付_1515）。同じ日に何回送っても同じフォルダに入ります。Googleログインは要りません。</div>
+    <div class="hint" id="folderStatus">販売先を選ぶと、フォルダ名が自動で決まります（日付_Y または 日付_1515）。同じ日に何回送っても同じフォルダに入ります。</div>
   </div>
 
   <div class="drop" id="drop">
@@ -237,9 +237,9 @@ let settings = {};
 try { settings = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) {}
 settings.resizeSize = settings.resizeSize || 1000;
 settings.endpointUrl = settings.endpointUrl || DEFAULT_ENDPOINT_URL;
-settings.who = settings.who || '';
 settings.target = settings.target || '';
-const WHO_LIST = ['浅居', '嶋田'];
+const CLIENT_ID = '174271920608-v6rbsu1f6r59kovibtnccu6eirnphkss.apps.googleusercontent.com';
+let idToken = '', whoName = '';
 const TARGET_LIST = [{ label: 'ヤフオク', sfx: 'Y' }, { label: '1515', sfx: '1515' }];
 
 
@@ -280,7 +280,6 @@ function buildSeg(id, items, key) {
     box.appendChild(b);
   });
 }
-buildSeg('whoSeg', WHO_LIST, 'who');
 buildSeg('targetSeg', TARGET_LIST, 'target');
 refreshFolderName();
 
@@ -620,7 +619,7 @@ function blobToBase64(blob) {
 
 async function sendToEndpoint(blob, filename, folderName) {
   const body = JSON.stringify({
-    who: settings.who,
+    idToken: idToken,
     folder: folderName,
     name: filename.replace(/\.\w+$/, '') + '.jpg',
     data: await blobToBase64(blob),
@@ -639,7 +638,7 @@ async function sendToEndpoint(blob, filename, folderName) {
 el('uploadAll').onclick = async () => {
   const folderName = el('folderNameInput').value.trim();
   if (!settings.endpointUrl || settings.endpointUrl === 'PASTE_WEBAPP_URL') { alert('受け口のURLが入っていません（設定を開いてください）'); el('openSettings').click(); return; }
-  if (!settings.who) { alert('担当者を選んでください'); return; }
+  if (!idToken || !whoName) { alert('先にGoogleでログインしてください'); return; }
   if (!settings.target) { alert('販売先（ヤフオク／1515）を選んでください'); return; }
   if (!folderName) { alert('保存先フォルダ名を入力してください'); return; }
   if (!/1515|ヤフオク|(^|[_\-\s.])[yYｙＹ]($|[_\-\s.])/.test(folderName)) { alert('フォルダ名に「_Y」か「_1515」が必要です（取り込みで販売先が分かるように）'); return; }
@@ -669,10 +668,36 @@ el('uploadAll').onclick = async () => {
     if (authFail) break;
   }
   uploading = false; updateSelectBar();
-  if (authFail) alert('合言葉が違います。ともくんから届いたリンクを開き直してください');
+  if (authFail) { idToken = ''; whoName = ''; showLogin('ログインの有効期限が切れました。もう一度ログインして、残りを送ってください。'); alert('ログインし直してください。送れなかった分は、ログイン後にもう一度「送る」で再送されます'); }
   else if (failed) el('folderStatus').textContent = `${failed} 枚が失敗。選び直して、もう一度送ると失敗分だけ再送します。`;
-  else el('folderStatus').textContent = `【${settings.who}】「${folderName}」に ${doneCount}枚、全部送れました`;
-};updateSelectBar();
+  else el('folderStatus').textContent = `【${whoName}】「${folderName}」に ${doneCount}枚、全部送れました`;
+};
+
+// ---------- Googleログイン（担当者はメールから自動で決まる） ----------
+function showLogin(msg) { el('whoLine').textContent = msg || 'Googleでログインしてください。'; el('gbtn').style.display = ''; }
+async function checkWho(tok) {
+  el('whoLine').textContent = 'ログインを確認中…';
+  try {
+    const res = await fetch(settings.endpointUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'who', idToken: tok }) });
+    const j = await res.json();
+    if (j.ok && j.who) {
+      idToken = tok; whoName = j.who;
+      el('whoLine').textContent = `【${whoName}】でログイン中。写真は ${whoName} の写真フォルダに入ります。`;
+      el('gbtn').style.display = 'none';
+      return;
+    }
+    showLogin(j.error === 'auth' ? 'このGoogleアカウントは登録されていません。ともくんに連絡してください。' : 'ログインできませんでした。もう一度どうぞ。');
+  } catch (e) { showLogin('通信できませんでした。もう一度どうぞ。'); }
+}
+function initGoogle() {
+  if (!window.google || !google.accounts) { setTimeout(initGoogle, 300); return; }
+  google.accounts.id.initialize({ client_id: CLIENT_ID, callback: r => checkWho(r.credential), auto_select: true });
+  google.accounts.id.renderButton(el('gbtn'), { theme: 'filled_blue', size: 'large', text: 'signin_with', locale: 'ja' });
+  google.accounts.id.prompt();
+}
+initGoogle();
+updateSelectBar();
 </script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </body>
 </html>
