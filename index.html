@@ -160,7 +160,7 @@
 <body>
 
 <header>
-  <h1>Y_1515 アップローダー<span class="ver">v11-14d</span></h1>
+  <h1>Y_1515 アップローダー<span class="ver">v11-14e</span></h1>
   <button class="gear" id="openSettings">⚙️</button>
 </header>
 
@@ -180,9 +180,12 @@
     <div class="btnrow">
       <button class="primary" id="pickCamera">📷 撮影</button>
       <button class="secondary" id="pickGallery">🖼 ギャラリーから選ぶ</button>
+      <button class="secondary" id="pickFiles">📁 ファイルから選ぶ</button>
     </div>
     <input type="file" id="fileCamera" accept="image/*" capture="environment">
     <input type="file" id="fileGallery" accept="image/*" multiple>
+    <input type="file" id="fileFiles" accept="image/*,application/pdf" multiple>
+    <div class="hint" style="margin-top:10px;">たくさん選ぶなら「ファイルから選ぶ」：写真を長押しして指をなぞると続けて選べて、右上の ⋮ から「すべて選択」もできます（スマホのファイル選択画面の機能）。</div>
   </div>
 
   <div class="selectbar" id="selectBar">
@@ -314,6 +317,8 @@ el('saveSettings').onclick = () => {
 // ---------- File picking ----------
 el('pickCamera').onclick = () => el('fileCamera').click();
 el('pickGallery').onclick = () => el('fileGallery').click();
+el('pickFiles').onclick = () => el('fileFiles').click();
+el('fileFiles').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 el('fileCamera').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 el('fileGallery').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 
@@ -393,7 +398,7 @@ function runThumbQueue() {
 }
 
 function addFiles(fileList) {
-  const list = [...fileList];
+  const list = [...fileList].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));   // 画像以外（PDFなど）は取り込まない
   const fresh = [];
   list.forEach(file => {
     if (files.some(f => f.file.name === file.name && f.file.size === file.size && f.file.lastModified === file.lastModified)) return;
